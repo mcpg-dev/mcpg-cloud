@@ -108,8 +108,10 @@ enum Command {
         /// Path to the config file to publish (validated server-side).
         #[arg(long)]
         config: Option<String>,
-        #[arg(long, default_value = "latest")]
-        image_tag: String,
+        /// Pin the gateway image tag. Omitted, the platform's default
+        /// gateway version applies.
+        #[arg(long)]
+        image_tag: Option<String>,
         #[arg(long, default_value_t = 1)]
         replicas: u32,
         #[arg(long, default_value = "")]
@@ -175,8 +177,10 @@ enum Command {
         name: String,
         #[arg(long)]
         to: i64,
-        #[arg(long, default_value = "latest")]
-        image_tag: String,
+        /// Pin the gateway image tag. Omitted, the platform's default
+        /// gateway version applies.
+        #[arg(long)]
+        image_tag: Option<String>,
         #[arg(long, default_value_t = 1)]
         replicas: u32,
         #[arg(long, default_value = "")]
@@ -357,7 +361,7 @@ async fn main() -> anyhow::Result<()> {
                 &c.env,
                 cloud::PublishArgs {
                     name,
-                    image_tag,
+                    image_tag: image_tag.unwrap_or_default(),
                     replicas,
                     region,
                     isolation_tier,
@@ -436,7 +440,7 @@ async fn main() -> anyhow::Result<()> {
                 &c.env,
                 &name,
                 to,
-                image_tag,
+                image_tag.unwrap_or_default(),
                 replicas,
                 region,
                 isolation_tier,

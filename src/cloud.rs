@@ -21,6 +21,9 @@ use serde::Serialize;
 #[derive(Serialize)]
 struct PublishBody {
     name: String,
+    /// Empty = unpinned: the field is omitted and the platform's default
+    /// gateway version applies.
+    #[serde(skip_serializing_if = "String::is_empty")]
     image_tag: String,
     replicas: u32,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -37,6 +40,7 @@ struct PublishBody {
 #[allow(clippy::too_many_arguments)]
 pub struct PublishArgs {
     pub name: String,
+    /// Empty = unpinned: the platform's default gateway version applies.
     pub image_tag: String,
     pub replicas: u32,
     pub region: String,
