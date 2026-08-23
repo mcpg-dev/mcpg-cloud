@@ -144,6 +144,6 @@ Apache-2.0. See [LICENSE](LICENSE).
 ## See also
 
 - <https://mcpg.dev/docs/reference/cli/cloud> — the full command reference
-- <https://mcpg.dev/docs/cloud/publish-a-config> — what a publish does end to end
-- <https://mcpg.dev/docs/cloud/versions-and-rollback> — config versions, diffs, rollbacks
-- <https://mcpg.dev/docs/cloud/custom-domains> — claiming and verifying a hostname
+- <https://mcpg.cloud/docs/publish-a-config> — what a publish does end to end
+- <https://mcpg.cloud/docs/versions-and-rollback> — config versions, diffs, rollbacks
+- <https://mcpg.cloud/docs/custom-domains> — claiming and verifying a hostname
