@@ -21,10 +21,6 @@ use serde::Serialize;
 #[derive(Serialize)]
 struct PublishBody {
     name: String,
-    /// Empty = unpinned: the field is omitted and the platform's default
-    /// gateway version applies.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    image_tag: String,
     replicas: u32,
     #[serde(skip_serializing_if = "String::is_empty")]
     region: String,
@@ -40,8 +36,6 @@ struct PublishBody {
 #[allow(clippy::too_many_arguments)]
 pub struct PublishArgs {
     pub name: String,
-    /// Empty = unpinned: the platform's default gateway version applies.
-    pub image_tag: String,
     pub replicas: u32,
     pub region: String,
     pub isolation_tier: String,
@@ -71,7 +65,6 @@ pub async fn publish(
     };
     let body = PublishBody {
         name: args.name.clone(),
-        image_tag: args.image_tag,
         replicas: args.replicas,
         region: args.region,
         isolation_tier: args.isolation_tier,
@@ -227,7 +220,6 @@ pub async fn rollback(
     env: &str,
     name: &str,
     to: i64,
-    image_tag: String,
     replicas: u32,
     region: String,
     isolation_tier: String,
@@ -238,7 +230,6 @@ pub async fn rollback(
         .raw_config;
     let body = PublishBody {
         name: name.to_owned(),
-        image_tag,
         replicas,
         region,
         isolation_tier,
@@ -258,6 +249,61 @@ pub async fn rollback(
         return Err(cp_error(&format!("rollback '{name}'"), resp).await);
     }
     println!("rolling '{name}' back to config version {to} …");
+    mcpg_cli_core::stream::stream_phases(resp).await
+}
+
+/// Re-publish the NEWEST config version in place, so the instance is
+/// re-provisioned at the platform's current gateway release. The same
+/// parameter caveat as `rollback` applies.
+#[allow(clippy::too_many_arguments)]
+pub async fn redeploy(
+    cp_url: &str,
+    state_dir: &Path,
+    org: &str,
+    ws: &str,
+    env: &str,
+    name: &str,
+    replicas: u32,
+    region: String,
+    isolation_tier: String,
+    size: String,
+) -> anyhow::Result<()> {
+    let versions = fetch_versions(&client(state_dir).await?, cp_url, org, ws, env, name).await?;
+    let Some(newest) = versions.iter().map(|v| v.version).max() else {
+        anyhow::bail!("'{name}' has no published config versions to redeploy");
+    };
+    let raw = fetch_version_raw(
+        &client(state_dir).await?,
+        cp_url,
+        org,
+        ws,
+        env,
+        name,
+        newest,
+    )
+    .await?
+    .raw_config;
+    let body = PublishBody {
+        name: name.to_owned(),
+        replicas,
+        region,
+        isolation_tier,
+        size,
+        custom_hostname: String::new(),
+        config_toml: raw,
+    };
+    let resp = client(state_dir)
+        .await?
+        .post(format!(
+            "{cp_url}/v1/orgs/{org}/workspaces/{ws}/environments/{env}/gateways"
+        ))
+        .json(&body)
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        return Err(cp_error(&format!("redeploy '{name}'"), resp).await);
+    }
+    println!("redeploying '{name}' at the platform's current release …");
     mcpg_cli_core::stream::stream_phases(resp).await
 }
 
@@ -749,6 +795,10 @@ struct InstanceView {
     instance_uid: String,
     state: String,
     #[serde(default)]
+    version: String,
+    #[serde(default)]
+    update_available: Option<String>,
+    #[serde(default)]
     addressable: Vec<String>,
     #[serde(default)]
     last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -778,10 +828,26 @@ pub async fn instances(cp_url: &str, state_dir: &Path, org: &str) -> anyhow::Res
         println!("(no instances in org {org} — `mcpg cloud publish` to create one)");
         return Ok(());
     }
-    println!("{:<38}  {:<10}  ENDPOINT", "INSTANCE_UID", "STATE");
+    println!(
+        "{:<38}  {:<10}  {:<18}  ENDPOINT",
+        "INSTANCE_UID", "STATE", "VERSION"
+    );
     for i in &list {
         let ep = i.addressable.first().map(String::as_str).unwrap_or("-");
-        println!("{:<38}  {:<10}  {}", i.instance_uid, i.state, ep);
+        let version = match &i.update_available {
+            Some(target) => format!("{} → {target}", i.version),
+            None => i.version.clone(),
+        };
+        println!(
+            "{:<38}  {:<10}  {:<18}  {}",
+            i.instance_uid, i.state, version, ep
+        );
+        if i.update_available.is_some() {
+            println!(
+                "{:<38}  {:<10}  update available — `mcpg cloud redeploy <name>` to adopt",
+                "", ""
+            );
+        }
         if let Some(seen) = i.last_seen_at {
             println!("{:<38}  {:<10}  last seen {}", "", "", seen.to_rfc3339());
         }
@@ -839,6 +905,8 @@ mod name_resolution_tests {
         InstanceView {
             instance_uid: uid.into(),
             state: "online".into(),
+            version: "0.1.0-beta.23".into(),
+            update_available: None,
             addressable: eps.iter().map(|s| s.to_string()).collect(),
             last_seen_at: None,
         }

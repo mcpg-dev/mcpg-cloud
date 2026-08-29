@@ -108,10 +108,6 @@ enum Command {
         /// Path to the config file to publish (validated server-side).
         #[arg(long)]
         config: Option<String>,
-        /// Pin the gateway image tag. Omitted, the platform's default
-        /// gateway version applies.
-        #[arg(long)]
-        image_tag: Option<String>,
         #[arg(long, default_value_t = 1)]
         replicas: u32,
         #[arg(long, default_value = "")]
@@ -177,10 +173,29 @@ enum Command {
         name: String,
         #[arg(long)]
         to: i64,
-        /// Pin the gateway image tag. Omitted, the platform's default
-        /// gateway version applies.
-        #[arg(long)]
-        image_tag: Option<String>,
+        #[arg(long, default_value_t = 1)]
+        replicas: u32,
+        #[arg(long, default_value = "")]
+        region: String,
+        #[arg(long, default_value = "")]
+        isolation_tier: String,
+        /// Instance size class. Your plan caps the maximum
+        /// (community: s, pro: m, team: l, enterprise: xl).
+        #[arg(long, default_value = "s", value_parser = ["s", "m", "l", "xl"])]
+        size: String,
+    },
+
+    /// Re-publish the newest config version so the instance adopts the
+    /// platform's current gateway release. Updates are never automatic —
+    /// this is the explicit adoption step (`instances` shows when one is
+    /// available).
+    ///
+    /// NOTE: like `rollback`, the deployment parameters below do NOT yet
+    /// default from the running instance — omitting them resets to these
+    /// defaults. Pass them explicitly if the instance deviates.
+    Redeploy {
+        /// Gateway name.
+        name: String,
         #[arg(long, default_value_t = 1)]
         replicas: u32,
         #[arg(long, default_value = "")]
@@ -345,7 +360,6 @@ async fn main() -> anyhow::Result<()> {
         Command::Publish {
             name,
             config,
-            image_tag,
             replicas,
             region,
             isolation_tier,
@@ -361,7 +375,6 @@ async fn main() -> anyhow::Result<()> {
                 &c.env,
                 cloud::PublishArgs {
                     name,
-                    image_tag: image_tag.unwrap_or_default(),
                     replicas,
                     region,
                     isolation_tier,
@@ -422,10 +435,31 @@ async fn main() -> anyhow::Result<()> {
             )
             .await
         }
+        Command::Redeploy {
+            name,
+            replicas,
+            region,
+            isolation_tier,
+            size,
+        } => {
+            let c = resolve_coords(cli.org, cli.workspace, cli.env, &ctx)?;
+            cloud::redeploy(
+                &cp_url,
+                &state_dir,
+                &c.org,
+                &c.workspace,
+                &c.env,
+                &name,
+                replicas,
+                region,
+                isolation_tier,
+                size,
+            )
+            .await
+        }
         Command::Rollback {
             name,
             to,
-            image_tag,
             replicas,
             region,
             isolation_tier,
@@ -440,7 +474,6 @@ async fn main() -> anyhow::Result<()> {
                 &c.env,
                 &name,
                 to,
-                image_tag.unwrap_or_default(),
                 replicas,
                 region,
                 isolation_tier,
