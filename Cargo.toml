@@ -1,6 +1,6 @@
 [package]
 name = "mcpg-cloud"
-version = "0.1.0-beta.19"
+version = "0.1.0-beta.20"
 edition = "2024"
 license = "Apache-2.0"
 description = "mcpg.cloud tenant CLI: login, publish configs as managed gateways, inspect instances/operations/logs, manage config versions and custom domains. Links cli-core only — not the control-plane server."
