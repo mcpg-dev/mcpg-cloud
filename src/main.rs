@@ -17,6 +17,7 @@
 //! Reached as `mcpg cloud …` through the gateway's front-door dispatch, or
 //! invoked directly as `mcpg-cloud …`.
 
+use anyhow::Context as _;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
@@ -120,6 +121,12 @@ enum Command {
         size: String,
         #[arg(long, default_value = "")]
         custom_hostname: String,
+        /// Run every publish gate (config policy, release compatibility,
+        /// plan, quota, domain, name) and report what a publish would do,
+        /// without reserving or provisioning anything. Exits 1 with the
+        /// publish's own refusal when it would be refused.
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Recent provisioning operations for the org.
@@ -221,6 +228,46 @@ enum Command {
     ServiceToken {
         #[command(subcommand)]
         cmd: ServiceTokenCmd,
+    },
+
+    /// Tenant secrets: values a gateway's config reads as `${env.TENANT_…}`.
+    /// Registered per gateway NAME (before or after its first publish),
+    /// delivered into the gateway pod on the next publish, never shown
+    /// again once set.
+    Secret {
+        #[command(subcommand)]
+        cmd: SecretCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum SecretCmd {
+    /// Set (or replace) one value. The value comes from `--value`, from the
+    /// environment variable named by `--from-env`, or from stdin — never
+    /// from the command line by accident: KEY alone reads stdin.
+    Set {
+        /// Gateway name.
+        name: String,
+        /// Key, `TENANT_` followed by [A-Z0-9_].
+        key: String,
+        /// The value, inline. Visible in shell history; prefer --from-env or stdin.
+        #[arg(long, conflicts_with = "from_env")]
+        value: Option<String>,
+        /// Read the value from this environment variable.
+        #[arg(long, conflicts_with = "value")]
+        from_env: Option<String>,
+    },
+    /// The registered keys for a gateway (never the values).
+    List {
+        /// Gateway name.
+        name: String,
+    },
+    /// Remove one key. Takes effect on the next publish.
+    Unset {
+        /// Gateway name.
+        name: String,
+        /// Key to remove.
+        key: String,
     },
 }
 
@@ -365,25 +412,23 @@ async fn main() -> anyhow::Result<()> {
             isolation_tier,
             size,
             custom_hostname,
+            dry_run,
         } => {
             let c = resolve_coords(cli.org, cli.workspace, cli.env, &ctx)?;
-            cloud::publish(
-                &cp_url,
-                &state_dir,
-                &c.org,
-                &c.workspace,
-                &c.env,
-                cloud::PublishArgs {
-                    name,
-                    replicas,
-                    region,
-                    isolation_tier,
-                    size,
-                    custom_hostname,
-                    config_file: config,
-                },
-            )
-            .await
+            let args = cloud::PublishArgs {
+                name,
+                replicas,
+                region,
+                isolation_tier,
+                size,
+                custom_hostname,
+                config_file: config,
+            };
+            if dry_run {
+                return cloud::validate(&cp_url, &state_dir, &c.org, &c.workspace, &c.env, args)
+                    .await;
+            }
+            cloud::publish(&cp_url, &state_dir, &c.org, &c.workspace, &c.env, args).await
         }
         Command::Operations => {
             let org = resolve_org(cli.org, &ctx)?;
@@ -517,6 +562,57 @@ async fn main() -> anyhow::Result<()> {
                 ServiceTokenCmd::List => cloud::service_token_list(&cp_url, &state_dir, &org).await,
                 ServiceTokenCmd::Revoke { id } => {
                     cloud::service_token_revoke(&cp_url, &state_dir, &org, &id).await
+                }
+            }
+        }
+        Command::Secret { cmd } => {
+            let c = resolve_coords(cli.org, cli.workspace, cli.env, &ctx)?;
+            match cmd {
+                SecretCmd::Set {
+                    name,
+                    key,
+                    value,
+                    from_env,
+                } => {
+                    let value = match (value, from_env) {
+                        (Some(v), _) => v,
+                        (None, Some(var)) => std::env::var(&var)
+                            .with_context(|| format!("--from-env {var}: variable is unset"))?,
+                        (None, None) => {
+                            let mut buf = String::new();
+                            std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
+                                .context("read the value from stdin")?;
+                            // A trailing newline is the terminal's, not the secret's.
+                            buf.trim_end_matches(['\n', '\r']).to_owned()
+                        }
+                    };
+                    cloud::secret_set(
+                        &cp_url,
+                        &state_dir,
+                        &c.org,
+                        &c.workspace,
+                        &c.env,
+                        &name,
+                        &key,
+                        &value,
+                    )
+                    .await
+                }
+                SecretCmd::List { name } => {
+                    cloud::secret_list(&cp_url, &state_dir, &c.org, &c.workspace, &c.env, &name)
+                        .await
+                }
+                SecretCmd::Unset { name, key } => {
+                    cloud::secret_unset(
+                        &cp_url,
+                        &state_dir,
+                        &c.org,
+                        &c.workspace,
+                        &c.env,
+                        &name,
+                        &key,
+                    )
+                    .await
                 }
             }
         }

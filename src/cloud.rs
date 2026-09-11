@@ -88,6 +88,79 @@ pub async fn publish(
     mcpg_cli_core::stream::stream_phases(resp).await
 }
 
+/// Dry run: the publish gates without the publish. The CP answers with the
+/// same status and body a publish would have been refused with, so the
+/// error path is `cp_error` exactly as for `publish`.
+pub async fn validate(
+    cp_url: &str,
+    state_dir: &Path,
+    org: &str,
+    workspace: &str,
+    environment: &str,
+    args: PublishArgs,
+) -> anyhow::Result<()> {
+    let config_toml = match &args.config_file {
+        Some(path) => {
+            std::fs::read_to_string(path).with_context(|| format!("read config file {path}"))?
+        }
+        None => String::new(),
+    };
+    let body = PublishBody {
+        name: args.name.clone(),
+        replicas: args.replicas,
+        region: args.region,
+        isolation_tier: args.isolation_tier,
+        size: args.size,
+        custom_hostname: args.custom_hostname,
+        config_toml,
+    };
+    let resp = client(state_dir)
+        .await?
+        .post(format!(
+            "{cp_url}/v1/orgs/{org}/workspaces/{workspace}/environments/{environment}/gateways/validate"
+        ))
+        .json(&body)
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        return Err(cp_error(&format!("validate '{}'", args.name), resp).await);
+    }
+    #[derive(serde::Deserialize)]
+    struct Report {
+        name: String,
+        action: String,
+        gateway_version: String,
+        size: String,
+        replicas: u32,
+        #[serde(default)]
+        custom_hostname: Option<String>,
+        config_sha256: String,
+        #[serde(default)]
+        tenant_secret_keys: Vec<String>,
+    }
+    let r: Report = resp.json().await?;
+    println!(
+        "✓ '{}' would {} ({} replica(s), size {}, gateway {})",
+        r.name,
+        match r.action.as_str() {
+            "update" => "update in place",
+            _ => "be created",
+        },
+        r.replicas,
+        r.size,
+        r.gateway_version
+    );
+    if let Some(host) = r.custom_hostname {
+        println!("  custom hostname: {host}");
+    }
+    println!("  config sha256:   {}", r.config_sha256);
+    if !r.tenant_secret_keys.is_empty() {
+        println!("  tenant secrets:  {}", r.tenant_secret_keys.join(", "));
+    }
+    println!("  nothing was reserved or provisioned");
+    Ok(())
+}
+
 pub async fn delete(
     cp_url: &str,
     state_dir: &Path,
@@ -512,6 +585,114 @@ struct TokenView {
     #[serde(default)]
     last_used_at: Option<String>,
     active: bool,
+}
+
+/// Register (or replace) one tenant secret. The value travels in the request
+/// body and is never echoed; the CP names the key back and says when it takes
+/// effect.
+#[allow(clippy::too_many_arguments)]
+pub async fn secret_set(
+    cp_url: &str,
+    state_dir: &Path,
+    org: &str,
+    workspace: &str,
+    environment: &str,
+    name: &str,
+    key: &str,
+    value: &str,
+) -> anyhow::Result<()> {
+    let resp = client(state_dir)
+        .await?
+        .put(format!(
+            "{cp_url}/v1/orgs/{org}/workspaces/{workspace}/environments/{environment}/gateways/{name}/secrets/{key}"
+        ))
+        .json(&serde_json::json!({ "value": value }))
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        return Err(cp_error(&format!("set secret '{key}' on '{name}'"), resp).await);
+    }
+    #[derive(serde::Deserialize)]
+    struct View {
+        key: String,
+        takes_effect: String,
+    }
+    let v: View = resp.json().await?;
+    println!("✓ {name}: {} set — takes effect {}", v.key, v.takes_effect);
+    println!("  reference it in the config as ${{env.{}}}", v.key);
+    Ok(())
+}
+
+/// The registered keys for a gateway. Values are never returned by the CP.
+pub async fn secret_list(
+    cp_url: &str,
+    state_dir: &Path,
+    org: &str,
+    workspace: &str,
+    environment: &str,
+    name: &str,
+) -> anyhow::Result<()> {
+    let resp = client(state_dir)
+        .await?
+        .get(format!(
+            "{cp_url}/v1/orgs/{org}/workspaces/{workspace}/environments/{environment}/gateways/{name}/secrets"
+        ))
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        return Err(cp_error(&format!("list secrets of '{name}'"), resp).await);
+    }
+    #[derive(serde::Deserialize)]
+    struct Key {
+        key: String,
+        created_by: String,
+        updated_at: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct View {
+        keys: Vec<Key>,
+    }
+    let v: View = resp.json().await?;
+    if v.keys.is_empty() {
+        println!(
+            "(no secrets registered for '{name}' — `mcpg cloud secret set {name} TENANT_<KEY>`)"
+        );
+        return Ok(());
+    }
+    println!("{:<40} {:<22} BY", "KEY", "UPDATED");
+    for k in &v.keys {
+        // Whole seconds are enough to tell two writes apart in a listing.
+        let updated = match k.updated_at.split_once('.') {
+            Some((secs, _)) => format!("{secs}Z"),
+            None => k.updated_at.clone(),
+        };
+        println!("{:<40} {:<22} {}", k.key, updated, k.created_by);
+    }
+    Ok(())
+}
+
+/// Remove one tenant secret.
+pub async fn secret_unset(
+    cp_url: &str,
+    state_dir: &Path,
+    org: &str,
+    workspace: &str,
+    environment: &str,
+    name: &str,
+    key: &str,
+) -> anyhow::Result<()> {
+    let resp = client(state_dir)
+        .await?
+        .delete(format!(
+            "{cp_url}/v1/orgs/{org}/workspaces/{workspace}/environments/{environment}/gateways/{name}/secrets/{key}"
+        ))
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        return Err(cp_error(&format!("unset secret '{key}' on '{name}'"), resp).await);
+    }
+    println!("✓ {name}: {key} removed — takes effect on the next publish");
+    Ok(())
 }
 
 /// Mint a service token. The plaintext is shown ONCE — there's no way to read it
