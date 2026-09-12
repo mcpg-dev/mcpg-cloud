@@ -230,10 +230,11 @@ enum Command {
         cmd: ServiceTokenCmd,
     },
 
-    /// Tenant secrets: values a gateway's config reads as `${env.TENANT_…}`.
-    /// Registered per gateway NAME (before or after its first publish),
-    /// delivered into the gateway pod on the next publish, never shown
-    /// again once set.
+    /// Secrets: values a gateway's config reads as `${secret.NAME}`.
+    /// Registered per gateway NAME (before or after its first publish);
+    /// a running gateway picks up a change within about a minute, a
+    /// not-yet-published one on its first publish. Never shown again
+    /// once set.
     Secret {
         #[command(subcommand)]
         cmd: SecretCmd,
@@ -248,7 +249,8 @@ enum SecretCmd {
     Set {
         /// Gateway name.
         name: String,
-        /// Key, `TENANT_` followed by [A-Z0-9_].
+        /// Key: a letter or `_`, then letters, digits or `_` (at most 64,
+        /// case-sensitive).
         key: String,
         /// The value, inline. Visible in shell history; prefer --from-env or stdin.
         #[arg(long, conflicts_with = "from_env")]
@@ -257,12 +259,13 @@ enum SecretCmd {
         #[arg(long, conflicts_with = "value")]
         from_env: Option<String>,
     },
-    /// The registered keys for a gateway (never the values).
+    /// The registered keys for a gateway (never the values), and whether the
+    /// gateway runs with exactly that set.
     List {
         /// Gateway name.
         name: String,
     },
-    /// Remove one key. Takes effect on the next publish.
+    /// Remove one key. A running gateway drops it within about a minute.
     Unset {
         /// Gateway name.
         name: String,

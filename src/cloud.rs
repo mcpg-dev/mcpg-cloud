@@ -136,7 +136,7 @@ pub async fn validate(
         custom_hostname: Option<String>,
         config_sha256: String,
         #[serde(default)]
-        tenant_secret_keys: Vec<String>,
+        secret_keys: Vec<String>,
     }
     let r: Report = resp.json().await?;
     println!(
@@ -154,8 +154,8 @@ pub async fn validate(
         println!("  custom hostname: {host}");
     }
     println!("  config sha256:   {}", r.config_sha256);
-    if !r.tenant_secret_keys.is_empty() {
-        println!("  tenant secrets:  {}", r.tenant_secret_keys.join(", "));
+    if !r.secret_keys.is_empty() {
+        println!("  secrets:         {}", r.secret_keys.join(", "));
     }
     println!("  nothing was reserved or provisioned");
     Ok(())
@@ -587,9 +587,40 @@ struct TokenView {
     active: bool,
 }
 
-/// Register (or replace) one tenant secret. The value travels in the request
-/// body and is never echoed; the CP names the key back and says when it takes
-/// effect.
+/// Where a set or unset left the gateway, as the CP reports it.
+#[derive(serde::Deserialize)]
+struct SecretDelivery {
+    state: String,
+    #[serde(default)]
+    detail: Option<String>,
+}
+
+/// The CP's answer to a set or unset: the key and where the change stands.
+#[derive(serde::Deserialize)]
+struct SecretChange {
+    key: String,
+    delivery: SecretDelivery,
+}
+
+/// One line saying what happened to the value: on the gateway already,
+/// waiting for the next publish, or stored but not delivered.
+fn describe_delivery(d: &SecretDelivery) -> String {
+    match d.state.as_str() {
+        "live" => "live (the gateway reloads within about a minute)".to_owned(),
+        "pending_publish" => "pending until the next publish".to_owned(),
+        "failed" => format!(
+            "stored, delivery failed: {}",
+            d.detail
+                .as_deref()
+                .unwrap_or("the provisioner refused the push")
+        ),
+        other => other.to_owned(),
+    }
+}
+
+/// Register (or replace) one secret. The value travels in the request body
+/// and is never echoed; the CP names the key back and says where the change
+/// stands.
 #[allow(clippy::too_many_arguments)]
 pub async fn secret_set(
     cp_url: &str,
@@ -612,18 +643,18 @@ pub async fn secret_set(
     if !resp.status().is_success() {
         return Err(cp_error(&format!("set secret '{key}' on '{name}'"), resp).await);
     }
-    #[derive(serde::Deserialize)]
-    struct View {
-        key: String,
-        takes_effect: String,
-    }
-    let v: View = resp.json().await?;
-    println!("✓ {name}: {} set — takes effect {}", v.key, v.takes_effect);
-    println!("  reference it in the config as ${{env.{}}}", v.key);
+    let v: SecretChange = resp.json().await?;
+    println!(
+        "✓ {name}: {} set — {}",
+        v.key,
+        describe_delivery(&v.delivery)
+    );
+    println!("  reference it in the config as ${{secret.{}}}", v.key);
     Ok(())
 }
 
-/// The registered keys for a gateway. Values are never returned by the CP.
+/// The registered keys for a gateway, and whether the gateway runs with
+/// exactly that set. Values are never returned by the CP.
 pub async fn secret_list(
     cp_url: &str,
     state_dir: &Path,
@@ -651,14 +682,24 @@ pub async fn secret_list(
     #[derive(serde::Deserialize)]
     struct View {
         keys: Vec<Key>,
+        /// `live` | `pending` | `unknown`: whether the gateway last reported
+        /// resolving exactly the registered set.
+        #[serde(default)]
+        state: String,
     }
     let v: View = resp.json().await?;
     if v.keys.is_empty() {
-        println!(
-            "(no secrets registered for '{name}' — `mcpg cloud secret set {name} TENANT_<KEY>`)"
-        );
+        println!("(no secrets registered for '{name}' — `mcpg cloud secret set {name} <KEY>`)");
         return Ok(());
     }
+    println!(
+        "state: {}",
+        if v.state.is_empty() {
+            "unknown"
+        } else {
+            v.state.as_str()
+        }
+    );
     println!("{:<40} {:<22} BY", "KEY", "UPDATED");
     for k in &v.keys {
         // Whole seconds are enough to tell two writes apart in a listing.
@@ -671,7 +712,7 @@ pub async fn secret_list(
     Ok(())
 }
 
-/// Remove one tenant secret.
+/// Remove one secret.
 pub async fn secret_unset(
     cp_url: &str,
     state_dir: &Path,
@@ -691,7 +732,12 @@ pub async fn secret_unset(
     if !resp.status().is_success() {
         return Err(cp_error(&format!("unset secret '{key}' on '{name}'"), resp).await);
     }
-    println!("✓ {name}: {key} removed — takes effect on the next publish");
+    let v: SecretChange = resp.json().await?;
+    println!(
+        "✓ {name}: {} removed — {}",
+        v.key,
+        describe_delivery(&v.delivery)
+    );
     Ok(())
 }
 
