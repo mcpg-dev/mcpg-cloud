@@ -186,6 +186,11 @@ pub async fn delete(
 struct VersionView {
     version: i64,
     content_sha256: String,
+    /// Hash of the config the instance runs for this version; an instance's
+    /// status `config_hash` carries it as `cfg:<rendered_sha256>`. Absent
+    /// until the publish reached READY.
+    #[serde(default)]
+    rendered_sha256: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -214,9 +219,17 @@ pub async fn versions(
         println!("(no config versions for '{name}')");
         return Ok(());
     }
-    println!("{:<8}  CONTENT-SHA256", "VERSION");
+    println!(
+        "{:<8}  {:<64}  RENDERED-SHA256",
+        "VERSION", "CONTENT-SHA256"
+    );
     for v in &list {
-        println!("{:<8}  {}", v.version, v.content_sha256);
+        println!(
+            "{:<8}  {:<64}  {}",
+            v.version,
+            v.content_sha256,
+            v.rendered_sha256.as_deref().unwrap_or("-")
+        );
     }
     Ok(())
 }
