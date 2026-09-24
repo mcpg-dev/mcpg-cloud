@@ -1,6 +1,6 @@
 [package]
 name = "mcpg-cloud"
-version = "0.1.0-beta.36"
+version = "0.1.0-beta.42"
 edition = "2024"
 license = "Apache-2.0"
 description = "mcpg.cloud tenant CLI: login, publish configs as managed gateways, inspect instances/operations/logs, manage config versions and custom domains. Links cli-core only — not the control-plane server."
@@ -8,7 +8,7 @@ description = "mcpg.cloud tenant CLI: login, publish configs as managed gateways
 [dependencies]
 # Shared CLI plumbing: OIDC PKCE login + credentials, Bearer client,
 # SSE phase streams, state-dir paths.
-mcpg-cli-core = { git = "https://github.com/mcpg-dev/mcpg-cli-core", tag = "v0.1.0-beta.28", version = "=0.1.0-beta.28" }
+mcpg-cli-core = { git = "https://github.com/mcpg-dev/mcpg-cli-core", tag = "v0.1.0-beta.34", version = "=0.1.0-beta.34" }
 
 # CLI
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
@@ -23,7 +23,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # HTTP client (Bearer client itself comes from cli-core; reqwest types
 # appear in this crate's signatures + the logs SSE drain)
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream"] }
 futures = "0.3"
 
 # Serde + views
