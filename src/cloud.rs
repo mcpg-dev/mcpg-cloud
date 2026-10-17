@@ -137,6 +137,8 @@ pub async fn validate(
         config_sha256: String,
         #[serde(default)]
         secret_keys: Vec<String>,
+        #[serde(default)]
+        warnings: Vec<String>,
     }
     let r: Report = resp.json().await?;
     println!(
@@ -156,6 +158,9 @@ pub async fn validate(
     println!("  config sha256:   {}", r.config_sha256);
     if !r.secret_keys.is_empty() {
         println!("  secrets:         {}", r.secret_keys.join(", "));
+    }
+    for w in &r.warnings {
+        println!("  warning:         {w}");
     }
     println!("  nothing was reserved or provisioned");
     Ok(())
