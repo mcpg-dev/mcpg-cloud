@@ -41,11 +41,13 @@ HTTP API — it links no server code and can be installed on its own.
 
 ## Install / Run
 
-The crate is `publish = false`; build it from this workspace or install the
-released binary alongside the rest of the `mcpg` toolchain.
+`mcpg-cloud` ships with `mcpg` in the `model-context-protocol-gateway`
+package:
 
 ```bash
-cargo build -p mcpg-cloud --release      # → target/release/mcpg-cloud
+npm install -g model-context-protocol-gateway   # or: pipx install / cargo install model-context-protocol-gateway
+curl -fsSL https://raw.githubusercontent.com/mcpg-dev/mcpg/main/install.sh | sh -s -- --bin mcpg-cloud   # this tool alone
+cargo build -p mcpg-cloud --release             # from source → target/release/mcpg-cloud
 ```
 
 `mcpg` dispatches bare-word subcommands to sibling binaries, so with
